@@ -316,15 +316,21 @@
 
                 let pos = this.el.object3D.position;
                 let obstacles = document.querySelectorAll('.solid');
-                let coins = document.querySelectorAll('.coin[visible="true"]');
-                let pBounds = { left: pos.x - this.halfW, right: pos.x + this.halfW, bottom: pos.y - this.halfH, top: pos.y + this.halfH };
-
-                // Recolección de monedas
-                for (let coin of coins) {
-                    const cPos = coin.object3D.position;
-                    const dist = Math.sqrt(Math.pow(pos.x - cPos.x, 2) + Math.pow(pos.y - cPos.y, 2));
-                    if (dist < 1.2) {
-                        coin.setAttribute('visible', 'false');
+                let coins = document.querySelectorAll('.coin');
+                
+                // --- RECOLECCIÓN DE MONEDAS (Súper Robusta) ---
+                for (let i = 0; i < coins.length; i++) {
+                    let coin = coins[i];
+                    if (coin.getAttribute('visible') === false || coin.getAttribute('visible') === 'false') continue;
+                    
+                    let cPos = coin.object3D.position;
+                    // Comprobamos distancia en X e Y (ignorado Z para facilitar la captura)
+                    let dx = Math.abs(pos.x - cPos.x);
+                    let dy = Math.abs(pos.y - cPos.y);
+                    
+                    // Umbral más amplio (2.0 unidades) para asegurar captura
+                    if (dx < 1.5 && dy < 1.8) {
+                        coin.setAttribute('visible', false);
                         this.updateScore(100);
                         RetroAudio.play('coin');
                     }
