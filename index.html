@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Super WebAR - Premium Edition</title>
+    
+    <!-- Librerías Actualizadas para mejor compatibilidad móvil -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.1.0/dist/aframe-extras.min.js"></script>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --primary: #ff4757;
+            --primary-dark: #e84118;
+            --glass: rgba(255, 255, 255, 0.15);
+            --glass-border: rgba(255, 255, 255, 0.3);
+            --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        * {
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0; 
+            overflow: hidden; 
+            overscroll-behavior: none; 
+            touch-action: none; 
+            width: 100%; 
+            height: 100%;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        #ui-container {
+            position: fixed; 
+            bottom: 40px; 
+            left: 0; 
+            width: 100%; 
+            display: flex; 
+            justify-content: space-between; 
+            padding: 0 40px; 
+            z-index: 9999; 
+            pointer-events: none;
+        }
+
+        .btn {
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            color: white;
+            padding: 18px;
+            font-size: 28px;
+            font-weight: 900;
+            pointer-events: auto;
+            cursor: pointer;
+            box-shadow: var(--shadow);
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 80px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn:active {
+            transform: scale(0.9);
+            background: var(--primary);
+            border-color: white;
+        }
+
+        #controls-left { 
+            display: flex; 
+            gap: 25px; 
+        }
+
+        #jump {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            padding: 18px 40px;
+            font-size: 24px;
+        }
+
+        #victory-screen {
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            display: none; 
+            flex-direction: column; 
+            justify-content: center; 
+            align-items: center; 
+            z-index: 10000; 
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        #victory-screen h1 {
+            color: white;
+            font-size: 56px;
+            font-weight: 900;
+            text-align: center;
+            margin-bottom: 40px;
+            text-shadow: 0 10px 20px rgba(0,0,0,0.5);
+            line-height: 1;
+        }
+
+        #victory-screen h1 span {
+            color: var(--primary);
+            display: block;
+            font-size: 0.5em;
+            text-transform: uppercase;
+            letter-spacing: 10px;
+            margin-top: 10px;
+        }
+
+        #btn-restart {
+            background: white;
+            color: black;
+            padding: 20px 50px;
+            border-radius: 50px;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <div id="controls-left">
+            <button class="btn" id="left">◀</button>
+            <button class="btn" id="right">▶</button>
+        </div>
+        <button class="btn" id="jump">SALTAR</button>
+    </div>
+
+    <div id="victory-screen">
+        <h1>¡NIVEL<span>COMPLETADO!</span></h1>
+        <button class="btn" id="btn-restart">REINICIAR</button>
+    </div>
+
+    <script>
+        // Prevenir zoom y menús contextuales para mejor experiencia de juego
+        window.addEventListener('contextmenu', (e) => e.preventDefault(), { passive: false });
+        document.addEventListener('touchmove', (e) => { if(e.touches.length > 1) e.preventDefault(); }, { passive: false });
+
+        AFRAME.registerComponent('occluder', {
+            init: function () {
+                this.el.addEventListener('loaded', () => {
+                    const mesh = this.el.getObject3D('mesh');
+                    if (mesh) { mesh.material.colorWrite = false; mesh.renderOrder = -1; }
+                });
+            }
+        });
+
+        AFRAME.registerComponent('arcade', {
+            init: function () {
+                // --- FÍSICAS OPTIMIZADAS ---
+                this.velocity = { x: 0, y: 0 };
+                this.gravity = -0.06;
+                this.speed = 0.2;
+                this.jumpPower = 1.1;
+                
+                // Hitbox Kai (1.2 unidades)
+                this.halfW = 0.6; 
+                this.halfH = 0.6; 
+                
+                this.moveLeft = false; 
+                this.moveRight = false; 
+                this.isGrounded = false; 
+                this.isFinished = false;
+                
+                this.kaiMesh = this.el.querySelector('#kai-model-entity');
+                this.currentAnim = 'Idle';
+
+                const bindBtn = (id, dir) => {
+                    const btn = document.getElementById(id);
+                    const start = (e) => { e.preventDefault(); e.stopPropagation(); this[dir] = true; };
+                    const end = (e) => { e.preventDefault(); e.stopPropagation(); this[dir] = false; };
+                    
+                    btn.addEventListener('pointerdown', start);
+                    btn.addEventListener('pointerup', end);
+                    btn.addEventListener('pointerleave', end);
+                    btn.addEventListener('pointercancel', end);
+                };
+
+                bindBtn('left', 'moveLeft'); 
+                bindBtn('right', 'moveRight');
+
+                document.getElementById('jump').addEventListener('pointerdown', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    if (this.isGrounded && !this.isFinished) {
+                        this.velocity.y = this.jumpPower;
+                        this.isGrounded = false;
+                    }
+                });
+
+                document.getElementById('btn-restart').addEventListener('pointerdown', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    this.resetGame();
+                });
+            },
+
+            resetGame: function() {
+                this.el.object3D.position.set(0, 0.6, 0);
+                this.velocity = { x: 0, y: 0 };
+                this.moveLeft = false; 
+                this.moveRight = false; 
+                this.isFinished = false;
+                document.getElementById('world-rig').object3D.position.x = 0;
+                document.getElementById('victory-screen').style.display = 'none';
+                if (this.kaiMesh) { 
+                    this.kaiMesh.setAttribute('animation-mixer', 'clip: Idle'); 
+                    this.currentAnim = 'Idle'; 
+                }
+            },
+
+            getBounds: function(el) {
+                const pos = el.object3D.position;
+                const w = parseFloat(el.getAttribute('width') || (el.getAttribute('radius') * 2) || 0);
+                const h = parseFloat(el.getAttribute('height') || 0);
+                return { 
+                    left: pos.x - w/2, 
+                    right: pos.x + w/2, 
+                    bottom: pos.y - h/2, 
+                    top: pos.y + h/2 
+                };
+            },
+
+            intersect: function(b1, b2) {
+                return b1.left < b2.right && b1.right > b2.left && b1.bottom < b2.top && b1.top > b2.bottom;
+            },
+
+            tick: function () {
+                if (this.isFinished) return;
+
+                let pos = this.el.object3D.position;
+                let obstacles = document.querySelectorAll('.solid');
+                let pBounds = { left: 0, right: 0, bottom: 0, top: 0 };
+
+                // Meta a 236 unidades
+                if (pos.x >= 236) {
+                    this.isFinished = true;
+                    document.getElementById('victory-screen').style.display = 'flex';
+                    if (this.kaiMesh) this.kaiMesh.setAttribute('animation-mixer', 'clip: Idle');
+                    return;
+                }
+
+                // Gestión de Animaciones y Rotación
+                if (this.kaiMesh) {
+                    let targetAnim = (this.moveLeft || this.moveRight) ? 'Running' : 'Idle';
+                    if (this.currentAnim !== targetAnim) {
+                        this.kaiMesh.setAttribute('animation-mixer', 'clip: ' + targetAnim);
+                        this.currentAnim = targetAnim;
+                    }
+                    if (this.moveRight) this.kaiMesh.setAttribute('rotation', '0 90 0');
+                    if (this.moveLeft) this.kaiMesh.setAttribute('rotation', '0 -90 0');
+                }
+
+                // Movimiento Horizontal
+                let oldX = pos.x;
+                if (this.moveLeft) pos.x -= this.speed;
+                if (this.moveRight) pos.x += this.speed;
+                if (pos.x < 0) pos.x = 0;
+
+                pBounds = { left: pos.x - this.halfW, right: pos.x + this.halfW, bottom: pos.y - this.halfH, top: pos.y + this.halfH };
+
+                for (let obs of obstacles) {
+                    if (this.intersect(pBounds, this.getBounds(obs))) {
+                        pos.x = oldX; break;
+                    }
+                }
+
+                // Movimiento Vertical (Gravedad y Salto)
+                let oldY = pos.y;
+                this.velocity.y += this.gravity;
+                pos.y += this.velocity.y;
+
+                pBounds = { left: pos.x - this.halfW, right: pos.x + this.halfW, bottom: pos.y - this.halfH, top: pos.y + this.halfH };
+                this.isGrounded = false;
+
+                for (let obs of obstacles) {
+                    if (this.intersect(pBounds, this.getBounds(obs))) {
+                        pos.y = oldY; 
+                        if (this.velocity.y < 0) this.isGrounded = true; 
+                        else if (this.velocity.y > 0 && obs.classList.contains('lucky-box')) obs.emit('hit');
+                        this.velocity.y = 0; break;
+                    }
+                }
+
+                if (pos.y <= this.halfH) {
+                    pos.y = this.halfH;
+                    this.velocity.y = 0;
+                    this.isGrounded = true;
+                }
+
+                // Seguimiento de cámara (Rig)
+                let worldRig = document.getElementById('world-rig').object3D;
+                worldRig.position.x = -pos.x;
+            }
+        });
+    </script>
+
+    <a-scene 
+        mindar-image="imageTargetSrc: ./targets.mind; autoStart: true; maxTrack: 1" 
+        vr-mode-ui="enabled: false" 
+        device-orientation-permission-ui="enabled: true"
+        renderer="colorManagement: true; physicallyCorrectLights: true;">
+        
+        <a-assets>
+            <a-asset-item id="kai-asset" src="./Kai.glb"></a-asset-item>
+            <img id="textura-tierra" src="./tierra.webp">
+            <img id="textura-cilindros" src="./Cilindros.webp">
+            <img id="textura-cajas" src="./Cubos.webp">
+            <img id="textura-nube" src="./nube.webp">
+        </a-assets>
+
+        <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+        <a-entity mindar-image-target="targetIndex: 0">
+            <a-entity rotation="90 0 0" position="0 0 0" scale="0.3 0.3 0.3">
+                
+                <!-- Oclusores laterales -->
+                <a-box occluder position="-20 10 0" width="20" height="40" depth="40"></a-box>
+                <a-box occluder position="20 10 0" width="20" height="40" depth="40"></a-box>
+                
+                <a-entity id="world-rig">
+                    
+                    <a-entity id="PJKai" arcade width="1.2" height="1.2" depth="1.2" position="0 0.6 0">
+                        <a-entity id="kai-model-entity" 
+                                  gltf-model="#kai-asset" 
+                                  position="0 -0.6 0" 
+                                  rotation="0 90 0" 
+                                  scale="1 1 1" 
+                                  animation-mixer="clip: Idle">
+                        </a-entity>
+                    </a-entity>
+
+                    <a-plane position="116 0 0" rotation="-90 0 0" width="240" height="2" src="#textura-tierra" repeat="120 1"></a-plane>
+
+                    <!-- Nivel -->
+                    <a-box class="solid" position="8 1 0" width="4" height="2" depth="2" src="#textura-cajas"></a-box>
+                    <a-cylinder class="solid" position="20 1.6 0" radius="1.2" height="3.2" src="#textura-cilindros"></a-cylinder>
+
+                    <a-box class="solid" position="32 4 0" width="8" height="0.8" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid lucky-box" position="32 8.8 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 32 9.6 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
+                    <a-box class="solid" position="44 6 0" width="6" height="0.8" depth="2"  src="#textura-cajas"></a-box>
+
+                    <a-cylinder class="solid" position="56 2.4 0" radius="1.2" height="4.8" src="#textura-cilindros"></a-cylinder>
+                    <a-cylinder class="solid" position="68 3.6 0" radius="1.2" height="7.2" src="#textura-cilindros"></a-cylinder>
+
+                    <a-box class="solid" position="80 1 0" width="16" height="2" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid lucky-box" position="76 6 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 76 6.8 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
+                    
+                    <a-cylinder class="solid" position="96 1.6 0" radius="1.2" height="3.2" src="#textura-cilindros"></a-cylinder>
+                    <a-box class="solid" position="104 4 0" width="1.6" height="1.6" depth="1.6"  src="#textura-cajas"></a-box>
+                    <a-box class="solid lucky-box" position="110 4 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 110 4.8 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
+                    <a-box class="solid" position="116 4 0" width="1.6" height="1.6" depth="1.6"  src="#textura-cajas"></a-box>
+                    
+                    <a-box class="solid" position="132 4 0" width="6" height="8" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid" position="126 2 0" width="4" height="0.8" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid" position="138 6 0" width="4" height="0.8" depth="2"  src="#textura-cajas"></a-box>
+
+                    <a-cylinder class="solid" position="152 2 0" radius="1.2" height="4.0" src="#textura-cilindros"></a-cylinder>
+                    <a-cylinder class="solid" position="160 3.2 0" radius="1.2" height="6.4" src="#textura-cilindros"></a-cylinder>
+                    <a-cylinder class="solid" position="168 2 0" radius="1.2" height="4.0" src="#textura-cilindros"></a-cylinder>
+
+                    <a-box class="solid lucky-box" position="184 4.8 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 184 5.6 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
+                    <a-box class="solid lucky-box" position="185.6 4.8 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 185.6 5.6 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
+                    <a-box class="solid lucky-box" position="187.2 4.8 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 187.2 5.6 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
+
+                    <a-box class="solid" position="200 1.6 0" width="2" height="3.2" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid" position="208 6 0" width="12" height="0.8" depth="2"  src="#textura-cajas"></a-box>
+
+                    <a-box class="solid" position="220 1 0" width="2" height="2" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid" position="222 2 0" width="2" height="4" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid" position="224 3 0" width="2" height="6" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid" position="226 4 0" width="2" height="8" depth="2"  src="#textura-cajas"></a-box>
+                    <a-box class="solid" position="228 5 0" width="2" height="10" depth="2"  src="#textura-cajas"></a-box>
+
+                    <a-box class="solid" position="236 1 0" width="4" height="2" depth="2"  src="#textura-cajas"></a-box>
+
+                </a-entity>
+            </a-entity>
+        </a-entity>
+    </a-scene>
+</body>
+</html>
