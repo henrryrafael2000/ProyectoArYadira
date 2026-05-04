@@ -13,11 +13,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
-
     <style>
         :root {
             --primary: #ff4757;
             --primary-dark: #e84118;
+            --secondary: #f1c40f;
             --glass: rgba(255, 255, 255, 0.15);
             --glass-border: rgba(255, 255, 255, 0.3);
             --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
@@ -41,6 +41,27 @@
             height: 100%;
             font-family: 'Outfit', sans-serif;
         }
+
+        #score-container {
+            position: fixed;
+            top: 30px;
+            right: 30px;
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            padding: 15px 25px;
+            border-radius: 20px;
+            color: white;
+            z-index: 9999;
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+        }
+
+        #score-label { font-size: 12px; text-transform: uppercase; letter-spacing: 2px; opacity: 0.8; }
+        #score-val { font-size: 32px; font-weight: 900; }
 
         #ui-container {
             position: fixed; 
@@ -145,6 +166,11 @@
 </head>
 <body>
 
+    <div id="score-container">
+        <span id="score-label">PUNTOS</span>
+        <span id="score-val">0000</span>
+    </div>
+
     <div id="ui-container">
         <div id="controls-left">
             <button class="btn" id="left">◀</button>
@@ -159,7 +185,48 @@
     </div>
 
     <script>
-        // Prevenir zoom y menús contextuales para mejor experiencia de juego
+        // --- MOTOR DE AUDIO RETRO (Web Audio API) ---
+        const RetroAudio = {
+            ctx: null,
+            init() { if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)(); },
+            play(type) {
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                
+                const now = this.ctx.currentTime;
+                if (type === 'jump') {
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(150, now);
+                    osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                    osc.start(); osc.stop(now + 0.1);
+                } else if (type === 'coin') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(900, now);
+                    osc.frequency.exponentialRampToValueAtTime(1200, now + 0.1);
+                    gain.gain.setValueAtTime(0.2, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                    osc.start(); osc.stop(now + 0.1);
+                } else if (type === 'win') {
+                    const notes = [523.25, 659.25, 783.99, 1046.50];
+                    notes.forEach((f, i) => {
+                        const o = this.ctx.createOscillator();
+                        const g = this.ctx.createGain();
+                        o.connect(g); g.connect(this.ctx.destination);
+                        o.frequency.setValueAtTime(f, now + i * 0.1);
+                        g.gain.setValueAtTime(0.1, now + i * 0.1);
+                        g.gain.exponentialRampToValueAtTime(0.01, now + i * 0.1 + 0.2);
+                        o.start(now + i * 0.1); o.stop(now + i * 0.1 + 0.2);
+                    });
+                }
+            }
+        };
+
+        // Prevenir zoom y menús contextuales
         window.addEventListener('contextmenu', (e) => e.preventDefault(), { passive: false });
         document.addEventListener('touchmove', (e) => { if(e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
@@ -174,21 +241,15 @@
 
         AFRAME.registerComponent('arcade', {
             init: function () {
-                // --- FÍSICAS OPTIMIZADAS ---
                 this.velocity = { x: 0, y: 0 };
                 this.gravity = -0.06;
                 this.speed = 0.2;
                 this.jumpPower = 1.1;
-                
-                // Hitbox Kai (1.2 unidades)
                 this.halfW = 0.6; 
                 this.halfH = 0.6; 
+                this.score = 0;
                 
-                this.moveLeft = false; 
-                this.moveRight = false; 
-                this.isGrounded = false; 
-                this.isFinished = false;
-                
+                this.moveLeft = false; this.moveRight = false; this.isGrounded = false; this.isFinished = false;
                 this.kaiMesh = this.el.querySelector('#kai-model-entity');
                 this.currentAnim = 'Idle';
 
@@ -196,21 +257,20 @@
                     const btn = document.getElementById(id);
                     const start = (e) => { e.preventDefault(); e.stopPropagation(); this[dir] = true; };
                     const end = (e) => { e.preventDefault(); e.stopPropagation(); this[dir] = false; };
-                    
                     btn.addEventListener('pointerdown', start);
                     btn.addEventListener('pointerup', end);
                     btn.addEventListener('pointerleave', end);
                     btn.addEventListener('pointercancel', end);
                 };
 
-                bindBtn('left', 'moveLeft'); 
-                bindBtn('right', 'moveRight');
+                bindBtn('left', 'moveLeft'); bindBtn('right', 'moveRight');
 
                 document.getElementById('jump').addEventListener('pointerdown', (e) => {
                     e.preventDefault(); e.stopPropagation();
                     if (this.isGrounded && !this.isFinished) {
                         this.velocity.y = this.jumpPower;
                         this.isGrounded = false;
+                        RetroAudio.play('jump');
                     }
                 });
 
@@ -223,27 +283,28 @@
             resetGame: function() {
                 this.el.object3D.position.set(0, 0.6, 0);
                 this.velocity = { x: 0, y: 0 };
-                this.moveLeft = false; 
-                this.moveRight = false; 
-                this.isFinished = false;
+                this.moveLeft = false; this.moveRight = false; this.isFinished = false;
+                this.score = 0;
+                this.updateScore(0);
                 document.getElementById('world-rig').object3D.position.x = 0;
                 document.getElementById('victory-screen').style.display = 'none';
-                if (this.kaiMesh) { 
-                    this.kaiMesh.setAttribute('animation-mixer', 'clip: Idle'); 
-                    this.currentAnim = 'Idle'; 
-                }
+                
+                // Respawn monedas
+                document.querySelectorAll('.coin').forEach(c => c.setAttribute('visible', 'true'));
+
+                if (this.kaiMesh) { this.kaiMesh.setAttribute('animation-mixer', 'clip: Idle'); this.currentAnim = 'Idle'; }
+            },
+
+            updateScore: function(val) {
+                this.score += val;
+                document.getElementById('score-val').innerText = this.score.toString().padStart(4, '0');
             },
 
             getBounds: function(el) {
                 const pos = el.object3D.position;
                 const w = parseFloat(el.getAttribute('width') || (el.getAttribute('radius') * 2) || 0);
                 const h = parseFloat(el.getAttribute('height') || 0);
-                return { 
-                    left: pos.x - w/2, 
-                    right: pos.x + w/2, 
-                    bottom: pos.y - h/2, 
-                    top: pos.y + h/2 
-                };
+                return { left: pos.x - w/2, right: pos.x + w/2, bottom: pos.y - h/2, top: pos.y + h/2 };
             },
 
             intersect: function(b1, b2) {
@@ -255,17 +316,30 @@
 
                 let pos = this.el.object3D.position;
                 let obstacles = document.querySelectorAll('.solid');
-                let pBounds = { left: 0, right: 0, bottom: 0, top: 0 };
+                let coins = document.querySelectorAll('.coin[visible="true"]');
+                let pBounds = { left: pos.x - this.halfW, right: pos.x + this.halfW, bottom: pos.y - this.halfH, top: pos.y + this.halfH };
 
-                // Meta a 236 unidades
+                // Recolección de monedas
+                for (let coin of coins) {
+                    const cPos = coin.object3D.position;
+                    const dist = Math.sqrt(Math.pow(pos.x - cPos.x, 2) + Math.pow(pos.y - cPos.y, 2));
+                    if (dist < 1.2) {
+                        coin.setAttribute('visible', 'false');
+                        this.updateScore(100);
+                        RetroAudio.play('coin');
+                    }
+                }
+
+                // Meta
                 if (pos.x >= 236) {
                     this.isFinished = true;
                     document.getElementById('victory-screen').style.display = 'flex';
+                    RetroAudio.play('win');
                     if (this.kaiMesh) this.kaiMesh.setAttribute('animation-mixer', 'clip: Idle');
                     return;
                 }
 
-                // Gestión de Animaciones y Rotación
+                // Animaciones
                 if (this.kaiMesh) {
                     let targetAnim = (this.moveLeft || this.moveRight) ? 'Running' : 'Idle';
                     if (this.currentAnim !== targetAnim) {
@@ -276,12 +350,11 @@
                     if (this.moveLeft) this.kaiMesh.setAttribute('rotation', '0 -90 0');
                 }
 
-                // Movimiento Horizontal
+                // Eje X
                 let oldX = pos.x;
                 if (this.moveLeft) pos.x -= this.speed;
                 if (this.moveRight) pos.x += this.speed;
                 if (pos.x < 0) pos.x = 0;
-
                 pBounds = { left: pos.x - this.halfW, right: pos.x + this.halfW, bottom: pos.y - this.halfH, top: pos.y + this.halfH };
 
                 for (let obs of obstacles) {
@@ -290,11 +363,10 @@
                     }
                 }
 
-                // Movimiento Vertical (Gravedad y Salto)
+                // Eje Y
                 let oldY = pos.y;
                 this.velocity.y += this.gravity;
                 pos.y += this.velocity.y;
-
                 pBounds = { left: pos.x - this.halfW, right: pos.x + this.halfW, bottom: pos.y - this.halfH, top: pos.y + this.halfH };
                 this.isGrounded = false;
 
@@ -302,20 +374,20 @@
                     if (this.intersect(pBounds, this.getBounds(obs))) {
                         pos.y = oldY; 
                         if (this.velocity.y < 0) this.isGrounded = true; 
-                        else if (this.velocity.y > 0 && obs.classList.contains('lucky-box')) obs.emit('hit');
+                        else if (this.velocity.y > 0 && obs.classList.contains('lucky-box')) {
+                             obs.emit('hit');
+                             RetroAudio.play('coin'); // Reutilizar sonido de moneda para cajas
+                             this.updateScore(50);
+                        }
                         this.velocity.y = 0; break;
                     }
                 }
 
                 if (pos.y <= this.halfH) {
-                    pos.y = this.halfH;
-                    this.velocity.y = 0;
-                    this.isGrounded = true;
+                    pos.y = this.halfH; this.velocity.y = 0; this.isGrounded = true;
                 }
 
-                // Seguimiento de cámara (Rig)
-                let worldRig = document.getElementById('world-rig').object3D;
-                worldRig.position.x = -pos.x;
+                document.getElementById('world-rig').object3D.position.x = -pos.x;
             }
         });
     </script>
@@ -339,66 +411,55 @@
         <a-entity mindar-image-target="targetIndex: 0">
             <a-entity rotation="90 0 0" position="0 0 0" scale="0.3 0.3 0.3">
                 
-                <!-- Oclusores laterales -->
                 <a-box occluder position="-20 10 0" width="20" height="40" depth="40"></a-box>
                 <a-box occluder position="20 10 0" width="20" height="40" depth="40"></a-box>
                 
                 <a-entity id="world-rig">
                     
                     <a-entity id="PJKai" arcade width="1.2" height="1.2" depth="1.2" position="0 0.6 0">
-                        <a-entity id="kai-model-entity" 
-                                  gltf-model="#kai-asset" 
-                                  position="0 -0.6 0" 
-                                  rotation="0 90 0" 
-                                  scale="1 1 1" 
-                                  animation-mixer="clip: Idle">
-                        </a-entity>
+                        <a-entity id="kai-model-entity" gltf-model="#kai-asset" position="0 -0.6 0" rotation="0 90 0" scale="1 1 1" animation-mixer="clip: Idle"></a-entity>
                     </a-entity>
 
                     <a-plane position="116 0 0" rotation="-90 0 0" width="240" height="2" src="#textura-tierra" repeat="120 1"></a-plane>
 
+                    <!-- Monedas (Coins) -->
+                    <a-entity class="coin" geometry="primitive: cylinder; radius: 0.5; height: 0.1" material="color: #f1c40f; metalness: 0.8; roughness: 0.2" position="15 2 0" rotation="90 0 0" animation="property: rotation; to: 90 360 0; loop: true; dur: 2000; easing: linear"></a-entity>
+                    <a-entity class="coin" geometry="primitive: cylinder; radius: 0.5; height: 0.1" material="color: #f1c40f; metalness: 0.8; roughness: 0.2" position="40 4 0" rotation="90 0 0" animation="property: rotation; to: 90 360 0; loop: true; dur: 2000; easing: linear"></a-entity>
+                    <a-entity class="coin" geometry="primitive: cylinder; radius: 0.5; height: 0.1" material="color: #f1c40f; metalness: 0.8; roughness: 0.2" position="68 8 0" rotation="90 0 0" animation="property: rotation; to: 90 360 0; loop: true; dur: 2000; easing: linear"></a-entity>
+                    <a-entity class="coin" geometry="primitive: cylinder; radius: 0.5; height: 0.1" material="color: #f1c40f; metalness: 0.8; roughness: 0.2" position="110 8 0" rotation="90 0 0" animation="property: rotation; to: 90 360 0; loop: true; dur: 2000; easing: linear"></a-entity>
+                    <a-entity class="coin" geometry="primitive: cylinder; radius: 0.5; height: 0.1" material="color: #f1c40f; metalness: 0.8; roughness: 0.2" position="185 8 0" rotation="90 0 0" animation="property: rotation; to: 90 360 0; loop: true; dur: 2000; easing: linear"></a-entity>
+
                     <!-- Nivel -->
                     <a-box class="solid" position="8 1 0" width="4" height="2" depth="2" src="#textura-cajas"></a-box>
                     <a-cylinder class="solid" position="20 1.6 0" radius="1.2" height="3.2" src="#textura-cilindros"></a-cylinder>
-
                     <a-box class="solid" position="32 4 0" width="8" height="0.8" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid lucky-box" position="32 8.8 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 32 9.6 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
                     <a-box class="solid" position="44 6 0" width="6" height="0.8" depth="2"  src="#textura-cajas"></a-box>
-
                     <a-cylinder class="solid" position="56 2.4 0" radius="1.2" height="4.8" src="#textura-cilindros"></a-cylinder>
                     <a-cylinder class="solid" position="68 3.6 0" radius="1.2" height="7.2" src="#textura-cilindros"></a-cylinder>
-
                     <a-box class="solid" position="80 1 0" width="16" height="2" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid lucky-box" position="76 6 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 76 6.8 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
-                    
                     <a-cylinder class="solid" position="96 1.6 0" radius="1.2" height="3.2" src="#textura-cilindros"></a-cylinder>
                     <a-box class="solid" position="104 4 0" width="1.6" height="1.6" depth="1.6"  src="#textura-cajas"></a-box>
                     <a-box class="solid lucky-box" position="110 4 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 110 4.8 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
                     <a-box class="solid" position="116 4 0" width="1.6" height="1.6" depth="1.6"  src="#textura-cajas"></a-box>
-                    
                     <a-box class="solid" position="132 4 0" width="6" height="8" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid" position="126 2 0" width="4" height="0.8" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid" position="138 6 0" width="4" height="0.8" depth="2"  src="#textura-cajas"></a-box>
-
                     <a-cylinder class="solid" position="152 2 0" radius="1.2" height="4.0" src="#textura-cilindros"></a-cylinder>
                     <a-cylinder class="solid" position="160 3.2 0" radius="1.2" height="6.4" src="#textura-cilindros"></a-cylinder>
                     <a-cylinder class="solid" position="168 2 0" radius="1.2" height="4.0" src="#textura-cilindros"></a-cylinder>
-
                     <a-box class="solid lucky-box" position="184 4.8 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 184 5.6 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
                     <a-box class="solid lucky-box" position="185.6 4.8 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 185.6 5.6 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
                     <a-box class="solid lucky-box" position="187.2 4.8 0" width="1.6" height="1.6" depth="1.6" src="#textura-nube" animation__hit="property: position; to: 187.2 5.6 0; dir: alternate; dur: 100; startEvents: hit; loop: 1"></a-box>
-
                     <a-box class="solid" position="200 1.6 0" width="2" height="3.2" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid" position="208 6 0" width="12" height="0.8" depth="2"  src="#textura-cajas"></a-box>
-
                     <a-box class="solid" position="220 1 0" width="2" height="2" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid" position="222 2 0" width="2" height="4" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid" position="224 3 0" width="2" height="6" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid" position="226 4 0" width="2" height="8" depth="2"  src="#textura-cajas"></a-box>
                     <a-box class="solid" position="228 5 0" width="2" height="10" depth="2"  src="#textura-cajas"></a-box>
-
                     <a-box class="solid" position="236 1 0" width="4" height="2" depth="2"  src="#textura-cajas"></a-box>
-
                 </a-entity>
             </a-entity>
         </a-entity>
